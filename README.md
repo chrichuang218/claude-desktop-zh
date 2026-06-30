@@ -9,17 +9,17 @@
 
 ## 效果图
 
-![效果图 1](screenshots/readme-01.png)
+![安装中文补丁](screenshots/readme-05.png)
 
-![效果图 2](screenshots/readme-02.png)
+![启动 Claude](screenshots/readme-06.png)
 
-![效果图 3](screenshots/readme-03.png)
+![恢复原样](screenshots/readme-04.png)
 
-![效果图 4](screenshots/readme-04.png)
+![效果图 4](screenshots/readme-01.png)
 
-![效果图 5](screenshots/readme-05.png)
+![效果图 5](screenshots/readme-02.png)
 
-![效果图 6](screenshots/readme-06.png)
+![效果图 6](screenshots/readme-03.png)
 
 ![效果图 7](screenshots/readme-07.png)
 
