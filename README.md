@@ -23,6 +23,8 @@
 
 ![效果图 7](screenshots/readme-07.png)
 
+![效果图 8](screenshots/readme-08.png)
+
 ## 功能
 
 | 功能 | 说明 |
