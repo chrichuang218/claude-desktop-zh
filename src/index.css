@@ -1,0 +1,67 @@
+:root {
+  --bg: #f7f4ed;
+  --surface: #fffdf8;
+  --surface-muted: #f0ece4;
+  --border: rgba(35, 32, 28, 0.12);
+  --border-strong: rgba(35, 32, 28, 0.24);
+
+  --text: #171512;
+  --text-soft: #5f5a52;
+  --text-muted: #8a8379;
+
+  --accent-warm: #d96f4f;
+  --ok-fg: #23745b;
+  --warn-fg: #a76522;
+  --danger-fg: #b8483b;
+  --focus: #d96f4f;
+
+  --primary-contrast: #ffffff;
+  --display: 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
+  --body: 'Microsoft YaHei UI', 'Microsoft YaHei', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'Cascadia Mono', 'Consolas', monospace;
+
+  --shadow-sm: 0 1px 2px rgba(35, 32, 28, 0.08), 0 8px 24px rgba(35, 32, 28, 0.08);
+  --shadow-md: 0 18px 60px rgba(35, 32, 28, 0.1);
+
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background: linear-gradient(180deg, #fbfaf6 0%, var(--bg) 54%, #f2eee6 100%);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+svg {
+  flex: 0 0 auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
