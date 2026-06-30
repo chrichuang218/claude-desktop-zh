@@ -662,45 +662,17 @@ fn run_patch_engine_elevated(
     let original_appdata = env::var("APPDATA").unwrap_or_default();
     let original_local_appdata = env::var("LOCALAPPDATA").unwrap_or_default();
 
-    let launcher_content = format!(
-        "$ErrorActionPreference='Stop'\n\
-         $exitCode = 1\n\
-         $exitCodePath = {completion}\n\
-         try {{\n\
-         Set-Location -LiteralPath {engine}\n\
-         $originalSid = {sid}\n\
-         $packageRoot = Get-ChildItem -LiteralPath 'C:\\Program Files\\WindowsApps' -Directory -Filter 'Claude_*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1\n\
-         if ($packageRoot) {{\n\
-             $resourcesPath = Join-Path $packageRoot.FullName 'app\\resources'\n\
-             if ((Test-Path -LiteralPath $resourcesPath) -and $originalSid) {{\n\
-                 & takeown.exe /F $resourcesPath /A /R /D Y | Out-Null\n\
-                 $grant = '*' + $originalSid + ':(OI)(CI)M'\n\
-                 & icacls.exe $resourcesPath /grant $grant /T /C /Q | Out-Null\n\
-             }}\n\
-         }}\n\
-         & {script} {action} {language} -PatchMode {patch_mode} \
-         -OriginalUserSid {sid} \
-         -OriginalUserProfile {profile} \
-         -OriginalAppData {appdata} \
-         -OriginalLocalAppData {local_appdata}\n\
-         $exitCode = $LASTEXITCODE\n\
-         }} catch {{\n\
-             Write-Host $_.Exception.Message\n\
-             $exitCode = 1\n\
-         }} finally {{\n\
-             [System.IO.File]::WriteAllText($exitCodePath, [string]$exitCode, [System.Text.Encoding]::ASCII)\n\
-         }}\n\
-         exit $exitCode\n",
-        completion = ps_path(&completion),
-        engine = ps_path(engine),
-        script = ps_path(&script),
-        action = ps_string(action),
-        language = ps_string(language),
-        patch_mode = ps_string(patch_mode),
-        sid = ps_string(&original_sid),
-        profile = ps_string(&original_profile),
-        appdata = ps_string(&original_appdata),
-        local_appdata = ps_string(&original_local_appdata),
+    let launcher_content = patch_engine_launcher_content(
+        engine,
+        &script,
+        &completion,
+        action,
+        language,
+        patch_mode,
+        &original_sid,
+        &original_profile,
+        &original_appdata,
+        &original_local_appdata,
     );
 
     write_powershell_script(&launcher, &launcher_content)
@@ -754,6 +726,60 @@ fn run_patch_engine_elevated(
     } else {
         Err(format!("{launch_output}\n\n{log}"))
     }
+}
+
+fn patch_engine_launcher_content(
+    engine: &Path,
+    script: &Path,
+    completion: &Path,
+    action: &str,
+    language: &str,
+    patch_mode: &str,
+    original_sid: &str,
+    original_profile: &str,
+    original_appdata: &str,
+    original_local_appdata: &str,
+) -> String {
+    format!(
+        "$ErrorActionPreference='Stop'\n\
+         $exitCode = 1\n\
+         $exitCodePath = {completion}\n\
+         try {{\n\
+         Set-Location -LiteralPath {engine}\n\
+         $originalSid = {sid}\n\
+         $packageRoot = Get-ChildItem -LiteralPath 'C:\\Program Files\\WindowsApps' -Directory -Filter 'Claude_*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1\n\
+         if ($packageRoot) {{\n\
+             $appPath = Join-Path $packageRoot.FullName 'app'\n\
+             if ((Test-Path -LiteralPath $appPath) -and $originalSid) {{\n\
+                 & takeown.exe /F $appPath /A /R /D Y | Out-Null\n\
+                 $grant = '*' + $originalSid + ':(OI)(CI)M'\n\
+                 & icacls.exe $appPath /grant $grant /T /C /Q | Out-Null\n\
+             }}\n\
+         }}\n\
+         & {script} {action} {language} -PatchMode {patch_mode} \
+         -OriginalUserSid {sid} \
+         -OriginalUserProfile {profile} \
+         -OriginalAppData {appdata} \
+         -OriginalLocalAppData {local_appdata}\n\
+         $exitCode = $LASTEXITCODE\n\
+         }} catch {{\n\
+             Write-Host $_.Exception.Message\n\
+             $exitCode = 1\n\
+         }} finally {{\n\
+             [System.IO.File]::WriteAllText($exitCodePath, [string]$exitCode, [System.Text.Encoding]::ASCII)\n\
+         }}\n\
+         exit $exitCode\n",
+        completion = ps_path(&completion),
+        engine = ps_path(engine),
+        script = ps_path(&script),
+        action = ps_string(action),
+        language = ps_string(language),
+        patch_mode = ps_string(patch_mode),
+        sid = ps_string(&original_sid),
+        profile = ps_string(&original_profile),
+        appdata = ps_string(&original_appdata),
+        local_appdata = ps_string(&original_local_appdata),
+    )
 }
 
 fn spawn_elevated_helper(
@@ -1603,6 +1629,27 @@ mod tests {
         assert!(!patched_source.contains("Write-Host \"slow\""));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn elevated_launcher_grants_windowsapps_app_access() {
+        let content = patch_engine_launcher_content(
+            Path::new("C:\\Temp\\engine"),
+            Path::new("C:\\Temp\\engine\\scripts\\install_windows_force_windowsapps.ps1"),
+            Path::new("C:\\Temp\\engine\\run.exitcode"),
+            "uninstall",
+            "zh-CN",
+            "safe",
+            "S-1-5-21-1000",
+            "C:\\Users\\Test",
+            "C:\\Users\\Test\\AppData\\Roaming",
+            "C:\\Users\\Test\\AppData\\Local",
+        );
+
+        assert!(content.contains("$appPath = Join-Path $packageRoot.FullName 'app'"));
+        assert!(content.contains("& takeown.exe /F $appPath /A /R /D Y"));
+        assert!(content.contains("& icacls.exe $appPath /grant $grant /T /C /Q"));
+        assert!(!content.contains("& icacls.exe $resourcesPath /grant $grant"));
     }
 
     #[test]

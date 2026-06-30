@@ -51,14 +51,21 @@ fn generate_embedded_patch_engine() {
 }
 
 fn patch_engine_source_dir() -> PathBuf {
-    env::var_os("PATCH_ENGINE_SOURCE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set"))
-                .join("..")
-                .join("..")
-                .join("claude-desktop-zh-cn")
-        })
+    if let Some(path) = env::var_os("PATCH_ENGINE_SOURCE_DIR") {
+        return PathBuf::from(path);
+    }
+
+    let manifest_dir =
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set"));
+    let vendor = manifest_dir
+        .join("..")
+        .join("vendor")
+        .join("claude-desktop-zh-cn");
+    if vendor.join("scripts").join("install_windows.ps1").exists() {
+        return vendor;
+    }
+
+    manifest_dir.join("..").join("..").join("claude-desktop-zh-cn")
 }
 
 fn collect_patch_engine_files(root: &Path, current: &Path, files: &mut Vec<(String, PathBuf)>) {
