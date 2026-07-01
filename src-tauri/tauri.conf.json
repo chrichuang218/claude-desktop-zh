@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "Claude Desktop 中文助手",
-        "width": 1588,
-        "height": 1094,
+        "width": 1160,
+        "height": 880,
         "minWidth": 900,
         "minHeight": 780,
         "resizable": true,
