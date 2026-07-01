@@ -65,7 +65,10 @@ fn patch_engine_source_dir() -> PathBuf {
         return vendor;
     }
 
-    manifest_dir.join("..").join("..").join("claude-desktop-zh-cn")
+    manifest_dir
+        .join("..")
+        .join("..")
+        .join("claude-desktop-zh-cn")
 }
 
 fn collect_patch_engine_files(root: &Path, current: &Path, files: &mut Vec<(String, PathBuf)>) {

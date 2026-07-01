@@ -86,15 +86,7 @@ fn open_claude() -> ActionResult {
     let Some(exe) = claude_exe_path() else {
         return ActionResult::error("missing", claude_install_missing_message());
     };
-    let mut command = Command::new(&exe);
-    hide_console_window(&mut command);
-    let launch_result = command
-        .current_dir(exe.parent().unwrap_or_else(|| Path::new(".")))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-
-    match launch_result {
+    match launch_claude_from_path(&exe) {
         Ok(_) => ActionResult {
             ok: true,
             state: "ready".to_string(),
@@ -546,6 +538,8 @@ fn patch_engine_translation_overrides(language: &str) -> Option<Vec<(&'static st
             ("Mn8BAEIrHk", "当前连续活跃"),
             ("C2KvkQvJR0", "最长连续活跃"),
             ("HcKBhf6Q5g", "最常用模型"),
+            ("Wr33QIAXEc", "今天我能帮你什么？"),
+            ("J1Y/kwmQJi", "一起完成一项待办吧"),
             ("NetAY1U905", "聊天、协作和代码现在位于侧边栏中。"),
             ("JQs8c3pGcl", "API 地址"),
             ("NA4SBfPMeA", "API 密钥"),
@@ -572,6 +566,8 @@ fn patch_engine_translation_overrides(language: &str) -> Option<Vec<(&'static st
             ("Mn8BAEIrHk", "目前連續活躍"),
             ("C2KvkQvJR0", "最長連續活躍"),
             ("HcKBhf6Q5g", "最常用模型"),
+            ("Wr33QIAXEc", "今天我能幫你什麼？"),
+            ("J1Y/kwmQJi", "一起完成一項待辦吧"),
             ("NetAY1U905", "聊天、協作和程式碼現在位於側邊欄中。"),
             ("JQs8c3pGcl", "API 位址"),
             ("NA4SBfPMeA", "API 金鑰"),
@@ -598,6 +594,8 @@ fn patch_engine_translation_overrides(language: &str) -> Option<Vec<(&'static st
             ("Mn8BAEIrHk", "目前連續活躍"),
             ("C2KvkQvJR0", "最長連續活躍"),
             ("HcKBhf6Q5g", "最常用模型"),
+            ("Wr33QIAXEc", "今日我可以幫你啲咩？"),
+            ("J1Y/kwmQJi", "一齊完成一項待辦吧"),
             ("NetAY1U905", "聊天、協作同代碼而家喺側邊欄。"),
             ("JQs8c3pGcl", "API 地址"),
             ("NA4SBfPMeA", "API 金鑰"),
@@ -866,6 +864,23 @@ fn prepare_patch_engine_appx_script(engine: &Path) -> Result<PathBuf, String> {
         "Patch-HardcodedFrontendStrings",
         FAST_HARDCODED_FRONTEND_PATCH_FUNCTION,
     )?;
+    let patched = replace_powershell_function(
+        &patched,
+        "Restart-Claude",
+        WINDOWSAPPS_SAFE_RESTART_FUNCTION,
+    )?;
+    let patched =
+        replace_powershell_function(&patched, "Find-ClaudePath", WINDOWSAPPS_FIND_CLAUDE_PATH)?;
+    let patched = replace_powershell_function(
+        &patched,
+        "Get-ClaudeConfigPaths",
+        WINDOWSAPPS_GET_CLAUDE_CONFIG_PATHS,
+    )?;
+    let patched = replace_powershell_function(
+        &patched,
+        "Uninstall-WindowsLanguagePack",
+        WINDOWSAPPS_SAFE_UNINSTALL_FUNCTION,
+    )?;
     let patched_path = engine
         .join("scripts")
         .join("install_windows_force_windowsapps.ps1");
@@ -986,6 +1001,25 @@ function Patch-HardcodedFrontendStrings {
             $patched = $patched.Replace($source, $target)
         }
 
+        if ($patched.Contains('"low","medium","high","xhigh","max"')) {
+            $script:__effortLabelReplacementCount = 0
+            $effortLabelPattern = '(?<prefix>label:)(?<item>[$A-Za-z_][$\w]*)\.name,value:\k<item>\.id,checked:(?<checked>[^,{}]+),onSelect:\(\)=>(?<select>[$A-Za-z_][$\w]*)\(\k<item>\.id,!1\)\}'
+            $effortLabelRegex = [System.Text.RegularExpressions.Regex]::new(
+                $effortLabelPattern,
+                [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+            )
+            $patched = $effortLabelRegex.Replace($patched, {
+                param($match)
+                $script:__effortLabelReplacementCount += 1
+                $item = $match.Groups["item"].Value
+                $checked = $match.Groups["checked"].Value
+                $select = $match.Groups["select"].Value
+                return 'label:({low:"低",medium:"中",high:"高",xhigh:"超高",max:"最高"}[' + $item + '.id]??' + $item + '.name),value:' + $item + '.id,checked:' + $checked + ',onSelect:()=>'+ $select + '(' + $item + '.id,!1)}'
+            })
+            $count += $script:__effortLabelReplacementCount
+            $script:__effortLabelReplacementCount = 0
+        }
+
         if ($plainRegex) {
             $script:__frontendReplacementCount = 0
             $patched = $plainRegex.Replace($patched, {
@@ -1015,10 +1049,161 @@ function Patch-HardcodedFrontendStrings {
 }
 "#;
 
+const WINDOWSAPPS_SAFE_RESTART_FUNCTION: &str = r#"
+function Restart-Claude {
+    param([string]$ClaudePath)
+
+    Stop-ClaudeProcesses
+
+    $exe = Get-ClaudeExePath $ClaudePath
+    if (-not $exe) {
+        Write-Host "  [警告] 未找到 Claude.exe，请手动启动 Claude Desktop。" -ForegroundColor DarkYellow
+        return
+    }
+
+    try {
+        $resolvedExe = Resolve-Path -LiteralPath $exe -ErrorAction Stop
+        $packageRoot = $resolvedExe.Path -split "\\app\\", 2 | Select-Object -First 1
+        $packageName = Split-Path -Leaf $packageRoot
+        if ($packageName -match "^([^_]+)_.+__([^_]+)$") {
+            $appId = "$($Matches[1])_$($Matches[2])!$($Matches[1])"
+            Start-Process explorer.exe "shell:AppsFolder\$appId" -ErrorAction Stop
+            Write-Host "  restarted Claude Desktop" -ForegroundColor Green
+            return
+        }
+
+        Start-Process $exe -ErrorAction Stop
+        Write-Host "  restarted Claude Desktop" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "  [警告] Claude Desktop 已汉化，但自动重启失败：$($_.Exception.Message)" -ForegroundColor DarkYellow
+        Write-Host "  [提示] 请从开始菜单手动打开 Claude。" -ForegroundColor DarkYellow
+    }
+}
+"#;
+
+const WINDOWSAPPS_FIND_CLAUDE_PATH: &str = r#"
+function Find-ClaudePath {
+    $fallback = Get-ChildItem "C:\Program Files\WindowsApps\Claude_*" -Directory -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($fallback) {
+        return $fallback.FullName
+    }
+
+    return $null
+}
+"#;
+
+const WINDOWSAPPS_GET_CLAUDE_CONFIG_PATHS: &str = r#"
+function Get-ClaudeConfigPaths {
+    if (-not $env:LOCALAPPDATA) {
+        return @()
+    }
+
+    $configPaths = @()
+    if ($env:APPDATA) {
+        $configPaths += Join-Path $env:APPDATA "Claude\config.json"
+        $configPaths += Join-Path $env:APPDATA "Claude-3p\config.json"
+    }
+
+    $packageRoot = Join-Path $env:LOCALAPPDATA "Packages"
+    $packageDirs = @(Get-ChildItem (Join-Path $packageRoot "Claude_*") -Directory -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending)
+    foreach ($packageDir in $packageDirs) {
+        $configPaths += Join-Path $packageDir.FullName "LocalCache\Roaming\Claude\config.json"
+        $configPaths += Join-Path $packageDir.FullName "LocalCache\Roaming\Claude-3p\config.json"
+    }
+
+    return @($configPaths | Select-Object -Unique)
+}
+"#;
+
+const WINDOWSAPPS_SAFE_UNINSTALL_FUNCTION: &str = r#"
+function Uninstall-WindowsLanguagePack {
+    Write-Host "=== Claude Desktop Windows 中文补丁卸载 ===" -ForegroundColor Cyan
+
+    $oldSkipAsarPatch = $SkipAsarPatch
+    $SkipAsarPatch = $true
+    try {
+        $paths = Get-ClaudeResourcesPath
+    }
+    finally {
+        $SkipAsarPatch = $oldSkipAsarPatch
+    }
+    $claudePath = $paths["App"]
+    $resourcesPath = $paths["Resources"]
+
+    Write-Step "关闭 Claude Desktop"
+    Stop-ClaudeProcesses
+    Remove-LegacyAppxForkArtifacts
+
+    Write-Step "[1/4] 恢复前端 bundle 和 app.asar"
+    Restore-LatestBackup $resourcesPath
+    if (Test-AsarPatchEnabled) {
+        Sync-ClaudeExeAsarIntegrity $resourcesPath
+    }
+    else {
+        Write-Host "  skipping Claude.exe asar integrity sync due to patch mode: $PatchMode" -ForegroundColor DarkYellow
+    }
+
+    Write-Step "[2/4] 删除中文资源"
+    Remove-LanguageFiles $resourcesPath
+
+    Write-Step "[3/4] 移除中文语言注册"
+    Unregister-Language $resourcesPath
+
+    Write-Step "[4/4] 恢复用户语言配置"
+    Set-ClaudeLocale "en-US"
+
+    Write-Host ""
+    Write-Host "卸载完成。请重启 Claude Desktop 使更改生效。" -ForegroundColor Green
+}
+"#;
+
 fn write_powershell_script(path: &Path, content: &str) -> std::io::Result<()> {
     let mut bytes = vec![0xEF, 0xBB, 0xBF];
     bytes.extend_from_slice(content.trim_start_matches('\u{feff}').as_bytes());
     fs::write(path, bytes)
+}
+
+fn launch_claude_from_path(exe: &Path) -> std::io::Result<()> {
+    if let Some(app_id) = windowsapps_app_user_model_id(exe) {
+        let mut command = Command::new("explorer.exe");
+        hide_console_window(&mut command);
+        command
+            .arg(format!(r"shell:AppsFolder\{app_id}"))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())?;
+        return Ok(());
+    }
+
+    let mut command = Command::new(exe);
+    hide_console_window(&mut command);
+    command
+        .current_dir(exe.parent().unwrap_or_else(|| Path::new(".")))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+}
+
+fn windowsapps_app_user_model_id(exe: &Path) -> Option<String> {
+    let package_root = exe.ancestors().find(|path| {
+        path.parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("WindowsApps"))
+    })?;
+    let package_name = package_root.file_name()?.to_str()?;
+    let (identity, publisher) = package_name.split_once("__")?;
+    let app_name = identity.split('_').next()?;
+    if app_name.is_empty() || publisher.is_empty() {
+        return None;
+    }
+    Some(format!("{app_name}_{publisher}!{app_name}"))
 }
 
 fn current_user_sid() -> Option<String> {
@@ -1615,7 +1800,7 @@ mod tests {
         fs::create_dir_all(&scripts).unwrap();
         fs::write(
             scripts.join("install_windows.ps1"),
-            "$script:DetectedUnpackagedClaudePaths = @(Get-UnpackagedClaudePaths)\nEnable-WriteAccess $resourcesPath\nfunction Patch-HardcodedFrontendStrings {\n    Write-Host \"slow\"\n}\n",
+            "$script:DetectedUnpackagedClaudePaths = @(Get-UnpackagedClaudePaths)\nEnable-WriteAccess $resourcesPath\nfunction Patch-HardcodedFrontendStrings {\n    Write-Host \"slow\"\n}\nfunction Restart-Claude {\n    param([string]$ClaudePath)\n    Start-Process $exe\n}\nfunction Find-ClaudePath {\n    $packages = @(Get-AppxPackage -Name \"Claude\" -ErrorAction SilentlyContinue)\n    return $packages[0].InstallLocation\n}\nfunction Get-ClaudeConfigPaths {\n    $packages = @(Get-AppxPackage -Name \"Claude\" -ErrorAction SilentlyContinue)\n    return @($packages[0].PackageFamilyName)\n}\nfunction Uninstall-WindowsLanguagePack {\n    Restore-LatestBackup $resourcesPath\n    Sync-ClaudeExeAsarIntegrity $resourcesPath\n}\n",
         )
         .unwrap();
 
@@ -1626,6 +1811,14 @@ mod tests {
         assert!(!patched_source.contains("Enable-WriteAccess $resourcesPath"));
         assert!(patched_source.contains("跳过脚本内部权限更新"));
         assert!(patched_source.contains("scanning frontend bundles"));
+        assert!(patched_source.contains("shell:AppsFolder\\$appId"));
+        assert!(patched_source.contains("自动重启失败"));
+        assert!(patched_source.contains(r#"Get-ChildItem "C:\Program Files\WindowsApps\Claude_*""#));
+        assert!(patched_source.contains(r#"Get-ChildItem (Join-Path $packageRoot "Claude_*")"#));
+        assert!(!patched_source.contains("Get-AppxPackage"));
+        assert!(patched_source.contains("if (Test-AsarPatchEnabled)"));
+        assert!(patched_source
+            .contains("skipping Claude.exe asar integrity sync due to patch mode: $PatchMode"));
         assert!(!patched_source.contains("Write-Host \"slow\""));
 
         let _ = fs::remove_dir_all(root);
@@ -1650,6 +1843,18 @@ mod tests {
         assert!(content.contains("& takeown.exe /F $appPath /A /R /D Y"));
         assert!(content.contains("& icacls.exe $appPath /grant $grant /T /C /Q"));
         assert!(!content.contains("& icacls.exe $resourcesPath /grant $grant"));
+    }
+
+    #[test]
+    fn derives_windowsapps_app_user_model_id() {
+        let exe = Path::new(
+            r"C:\Program Files\WindowsApps\Claude_1.17377.1.0_x64__pzs8sxrjxfjjc\app\claude.exe",
+        );
+
+        assert_eq!(
+            windowsapps_app_user_model_id(exe).as_deref(),
+            Some("Claude_pzs8sxrjxfjjc!Claude")
+        );
     }
 
     #[test]
@@ -1773,6 +1978,8 @@ mod tests {
   "Mn8BAEIrHk": "当前连胜",
   "C2KvkQvJR0": "最长连胜",
   "HcKBhf6Q5g": "常用模型",
+  "Wr33QIAXEc": "What can I help you with?",
+  "J1Y/kwmQJi": "Let’s knock something off your list",
   "477I0ggSYe": "Low",
   "ovJ26CKo4Q": "Medium",
   "AxMhQrcUDC": "High",
@@ -1823,6 +2030,8 @@ mod tests {
         assert_eq!(patched["Mn8BAEIrHk"], "当前连续活跃");
         assert_eq!(patched["C2KvkQvJR0"], "最长连续活跃");
         assert_eq!(patched["HcKBhf6Q5g"], "最常用模型");
+        assert_eq!(patched["Wr33QIAXEc"], "今天我能帮你什么？");
+        assert_eq!(patched["J1Y/kwmQJi"], "一起完成一项待办吧");
         assert_eq!(patched["477I0ggSYe"], "低");
         assert_eq!(patched["ovJ26CKo4Q"], "中");
         assert_eq!(patched["AxMhQrcUDC"], "高");
@@ -1840,10 +2049,14 @@ mod tests {
         assert_eq!(patched["9dx43BqWHy"], "更快");
         assert_eq!(patched["bTBJTYxUYl"], "更聪明");
         assert_eq!(patched_tw["xi2NxiZh10"], "協作");
+        assert_eq!(patched_tw["Wr33QIAXEc"], "今天我能幫你什麼？");
+        assert_eq!(patched_tw["J1Y/kwmQJi"], "一起完成一項待辦吧");
         assert_eq!(patched_tw["ufa5QA7ilZ"], "超強程式碼");
         assert_eq!(patched_tw["UFyiKhwBs8"], "超強程式碼 = 超高思考深度 + 工作流程。最完整，但最慢，也最消耗額度。關閉分頁或重新啟動應用程式後會重設。");
         assert_eq!(patched_tw["kkjl2vQekD"], "最高");
         assert_eq!(patched_hk["xi2NxiZh10"], "協作");
+        assert_eq!(patched_hk["Wr33QIAXEc"], "今日我可以幫你啲咩？");
+        assert_eq!(patched_hk["J1Y/kwmQJi"], "一齊完成一項待辦吧");
         assert_eq!(patched_hk["ufa5QA7ilZ"], "超強代碼");
         assert_eq!(patched_hk["UFyiKhwBs8"], "超強代碼 = 超高思考深度 + 工作流程。最完整，但最慢，亦最消耗額度。關閉分頁或重新啟動應用程式後會重設。");
         assert_eq!(patched_hk["kkjl2vQekD"], "最高");
@@ -1902,5 +2115,60 @@ mod tests {
         assert!(output.status.success(), "{stderr}");
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn fast_frontend_patch_function_handles_effort_label_variable_changes() {
+        let root = env::temp_dir().join(format!(
+            "cc-desktop-zh-effort-label-test-{}",
+            std::process::id()
+        ));
+        let assets = root.join("ion-dist").join("assets").join("v1");
+        fs::create_dir_all(&assets).unwrap();
+        let bundle = assets.join("effort.js");
+        fs::write(
+            &bundle,
+            r#"const nj=["low","medium","high","xhigh","max"];const e=Jt.map(e=>({label:e.name,value:e.id,checked:!hn&&e.id===cn,onSelect:()=>wn(e.id,!1)}));"#,
+        )
+        .unwrap();
+
+        let script = format!(
+            "$ErrorActionPreference='Stop'\n\
+             $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)\n\
+             function Get-FrontendHardcodedReplacements {{ param([string]$Language) return @() }}\n\
+             function Test-StructuralJsReplacement {{ param([string]$Source) return $false }}\n\
+             function Test-PlainUiTextReplacement {{ param([string]$Source) return $true }}\n\
+             function Backup-ModifiedFile {{ param([string]$ResourcesPath, [string]$FilePath) }}\n\
+             {function_body}\n\
+             Patch-HardcodedFrontendStrings {root} 'zh-CN'\n\
+             $text = [System.IO.File]::ReadAllText({bundle}, [System.Text.Encoding]::UTF8)\n\
+             $expected = 'label:({{low:\"低\",medium:\"中\",high:\"高\",xhigh:\"超高\",max:\"最高\"}}[e.id]??e.name),value:e.id,checked:!hn&&e.id===cn,onSelect:()=>wn(e.id,!1)}}'\n\
+             if (-not $text.Contains($expected)) {{ throw \"effort label patch did not apply: $text\" }}\n",
+            function_body = FAST_HARDCODED_FRONTEND_PATCH_FUNCTION,
+            root = ps_path(&root),
+            bundle = ps_path(&bundle),
+        );
+        let script_path = root.with_extension("ps1");
+        write_powershell_script(&script_path, &script).unwrap();
+
+        let mut command = Command::new("powershell.exe");
+        hide_console_window(&mut command);
+        let output = command
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                &script_path.to_string_lossy(),
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_file(script_path);
     }
 }
