@@ -1,9 +1,8 @@
 use serde::Serialize;
-use serde_json::Value;
 use std::{
     cmp::Ordering,
     env, fs,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -59,14 +58,6 @@ const PATCH_ENGINE_ZIP_URL: &str =
 const ELEVATED_HELPER_ARG: &str = "--run-patch-engine-elevated-helper";
 const PRODUCT_DATA_DIR: &str = "ClaudeDesktopCN";
 const PATCH_ENGINE_DIR: &str = "patch-engine";
-
-#[derive(Debug, Clone, Copy)]
-struct EmbeddedPatchFile {
-    relative_path: &'static str,
-    bytes: &'static [u8],
-}
-
-include!(concat!(env!("OUT_DIR"), "/embedded_patch_engine.rs"));
 
 #[tauri::command]
 fn get_status() -> LauncherStatus {
@@ -224,8 +215,7 @@ fn read_status() -> LauncherStatus {
     let launcher_ready = installed;
     let shortcut_ready = installed;
     let engine_path = patch_engine_path();
-    let engine_ready =
-        patch_engine_script_path(&engine_path).exists() || has_embedded_patch_engine();
+    let engine_ready = true;
     let patcher_ready = engine_ready;
     let python_ready = command_exists("powershell");
     let version = read_file_version().unwrap_or_else(|| "未检测到".to_string());
@@ -298,9 +288,6 @@ fn run_patch_engine_action(action: &str, language: &str, patch_mode: &str) -> Ac
         Ok(path) => path,
         Err(error) => return ActionResult::error("repair", &error),
     };
-    if let Err(error) = apply_patch_engine_translation_overrides(&engine, language) {
-        return ActionResult::error("repair", &error);
-    }
 
     match run_patch_engine_elevated(&engine, action, language, patch_mode) {
         Ok(log) => {
@@ -342,17 +329,6 @@ fn patch_engine_failure_message(action: &str) -> String {
 
 fn ensure_patch_engine() -> Result<PathBuf, String> {
     let engine = patch_engine_path();
-    if patch_engine_script_path(&engine).exists() {
-        return Ok(engine);
-    }
-    if has_embedded_patch_engine() {
-        write_embedded_patch_engine(&engine, EMBEDDED_PATCH_ENGINE)?;
-        if patch_engine_script_path(&engine).exists() {
-            return Ok(engine);
-        }
-        return Err("内置补丁引擎缺少 Windows 安装脚本。".to_string());
-    }
-
     let parent = engine
         .parent()
         .ok_or_else(|| "无法确定补丁引擎目录。".to_string())?;
@@ -360,23 +336,29 @@ fn ensure_patch_engine() -> Result<PathBuf, String> {
 
     let temp = parent.join("patch-engine-download");
     let zip = parent.join("patch-engine-main.zip");
+    let stage = parent.join("patch-engine-next");
     let command = format!(
         "$ErrorActionPreference='Stop';\
-         $dst={dst}; $tmp={tmp}; $zip={zip};\
+         $dst={dst}; $tmp={tmp}; $zip={zip}; $stage={stage};\
          if (Test-Path -LiteralPath $tmp) {{ Remove-Item -LiteralPath $tmp -Recurse -Force }};\
          if (Test-Path -LiteralPath $zip) {{ Remove-Item -LiteralPath $zip -Force }};\
+         if (Test-Path -LiteralPath $stage) {{ Remove-Item -LiteralPath $stage -Recurse -Force }};\
          New-Item -ItemType Directory -Path $tmp -Force | Out-Null;\
          Invoke-WebRequest -Uri {url} -OutFile $zip -UseBasicParsing;\
          Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force;\
          $inner = Get-ChildItem -LiteralPath $tmp -Directory | Select-Object -First 1;\
          if (-not $inner) {{ throw 'GitHub 压缩包内容为空。' }};\
+         $script = Join-Path $inner.FullName 'scripts\\install_windows.ps1';\
+         if (-not (Test-Path -LiteralPath $script)) {{ throw 'GitHub 压缩包缺少 Windows 安装脚本。' }};\
+         Move-Item -LiteralPath $inner.FullName -Destination $stage;\
          if (Test-Path -LiteralPath $dst) {{ Remove-Item -LiteralPath $dst -Recurse -Force }};\
-         Move-Item -LiteralPath $inner.FullName -Destination $dst;\
+         Move-Item -LiteralPath $stage -Destination $dst;\
          Remove-Item -LiteralPath $tmp -Recurse -Force;\
          Remove-Item -LiteralPath $zip -Force",
         dst = ps_path(&engine),
         tmp = ps_path(&temp),
         zip = ps_path(&zip),
+        stage = ps_path(&stage),
         url = ps_string(PATCH_ENGINE_ZIP_URL),
     );
 
@@ -407,236 +389,6 @@ fn ensure_patch_engine() -> Result<PathBuf, String> {
     } else {
         Err("补丁引擎下载完成，但缺少 Windows 安装脚本。".to_string())
     }
-}
-
-fn has_embedded_patch_engine() -> bool {
-    EMBEDDED_PATCH_ENGINE
-        .iter()
-        .any(|file| file.relative_path == "scripts/install_windows.ps1")
-}
-
-fn write_embedded_patch_engine(engine: &Path, files: &[EmbeddedPatchFile]) -> Result<(), String> {
-    let parent = engine
-        .parent()
-        .ok_or_else(|| "无法确定补丁引擎目录。".to_string())?;
-    fs::create_dir_all(parent).map_err(|error| format!("创建补丁引擎目录失败：{error}"))?;
-
-    let temp = parent.join(format!(
-        ".{PATCH_ENGINE_DIR}.embedded-{}",
-        std::process::id()
-    ));
-    if temp.exists() {
-        fs::remove_dir_all(&temp).map_err(|error| format!("清理临时补丁引擎失败：{error}"))?;
-    }
-    fs::create_dir_all(&temp).map_err(|error| format!("创建临时补丁引擎失败：{error}"))?;
-
-    for file in files {
-        let relative = safe_embedded_patch_path(file.relative_path)?;
-        let destination = temp.join(relative);
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent).map_err(|error| format!("创建补丁目录失败：{error}"))?;
-        }
-        fs::write(&destination, file.bytes)
-            .map_err(|error| format!("写入内置补丁文件 {} 失败：{error}", file.relative_path))?;
-    }
-
-    if engine.exists() {
-        fs::remove_dir_all(engine).map_err(|error| format!("替换旧补丁引擎失败：{error}"))?;
-    }
-    fs::rename(&temp, engine).map_err(|error| format!("启用内置补丁引擎失败：{error}"))?;
-    Ok(())
-}
-
-fn safe_embedded_patch_path(relative_path: &str) -> Result<PathBuf, String> {
-    let path = Path::new(relative_path);
-    if path.is_absolute()
-        || path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Err(format!("非法内置补丁路径：{relative_path}"));
-    }
-    Ok(path.to_path_buf())
-}
-
-fn apply_patch_engine_translation_overrides(engine: &Path, language: &str) -> Result<(), String> {
-    let Some(overrides) = patch_engine_translation_overrides(language) else {
-        return Ok(());
-    };
-
-    let resource_path = engine
-        .join("resources")
-        .join(format!("frontend-{language}.json"));
-    if !resource_path.exists() {
-        return Ok(());
-    }
-
-    let raw = fs::read_to_string(&resource_path)
-        .map_err(|error| format!("读取中文资源覆盖表失败：{error}"))?;
-    let mut json: Value =
-        serde_json::from_str(&raw).map_err(|error| format!("解析中文资源覆盖表失败：{error}"))?;
-    let Some(map) = json.as_object_mut() else {
-        return Err("中文资源覆盖表格式异常。".to_string());
-    };
-
-    for (key, value) in overrides {
-        map.insert(key.to_string(), Value::String(value.to_string()));
-    }
-
-    let formatted = serde_json::to_string_pretty(&json)
-        .map_err(|error| format!("写入中文资源覆盖表失败：{error}"))?;
-    fs::write(&resource_path, formatted)
-        .map_err(|error| format!("保存中文资源覆盖表失败：{error}"))?;
-
-    apply_patch_engine_hardcoded_overrides(engine, language)
-}
-
-fn apply_patch_engine_hardcoded_overrides(engine: &Path, language: &str) -> Result<(), String> {
-    let Some(overrides) = patch_engine_hardcoded_overrides(language) else {
-        return Ok(());
-    };
-
-    let resource_path = engine
-        .join("resources")
-        .join(format!("frontend-hardcoded-{language}.json"));
-    if !resource_path.exists() {
-        return Ok(());
-    }
-
-    let raw = fs::read_to_string(&resource_path)
-        .map_err(|error| format!("读取硬编码覆盖表失败：{error}"))?;
-    let mut json: Value =
-        serde_json::from_str(&raw).map_err(|error| format!("解析硬编码覆盖表失败：{error}"))?;
-    let Some(items) = json.as_array_mut() else {
-        return Err("硬编码覆盖表格式异常。".to_string());
-    };
-
-    for (source, target) in overrides {
-        let pair = Value::Array(vec![
-            Value::String(source.to_string()),
-            Value::String(target.to_string()),
-        ]);
-        if let Some(existing) = items
-            .iter_mut()
-            .find(|item| item.get(0).and_then(Value::as_str) == Some(source))
-        {
-            *existing = pair;
-        } else {
-            items.push(pair);
-        }
-    }
-
-    let formatted = serde_json::to_string_pretty(&json)
-        .map_err(|error| format!("写入硬编码覆盖表失败：{error}"))?;
-    fs::write(&resource_path, formatted).map_err(|error| format!("保存硬编码覆盖表失败：{error}"))
-}
-
-fn patch_engine_translation_overrides(language: &str) -> Option<Vec<(&'static str, &'static str)>> {
-    let overrides = match language {
-        "zh-CN" => vec![
-            ("xi2NxiZh10", "协作"),
-            ("Mn8BAEIrHk", "当前连续活跃"),
-            ("C2KvkQvJR0", "最长连续活跃"),
-            ("HcKBhf6Q5g", "最常用模型"),
-            ("Wr33QIAXEc", "今天我能帮你什么？"),
-            ("J1Y/kwmQJi", "一起完成一项待办吧"),
-            ("NetAY1U905", "聊天、协作和代码现在位于侧边栏中。"),
-            ("JQs8c3pGcl", "API 地址"),
-            ("NA4SBfPMeA", "API 密钥"),
-            ("VKZ/U8vAsk", "思考深度"),
-            ("477I0ggSYe", "低"),
-            ("ovJ26CKo4Q", "中"),
-            ("AxMhQrcUDC", "高"),
-            ("kDEj60CmLq", "超高"),
-            ("kkjl2vQekD", "最高"),
-            (
-                "TRhvKflygs",
-                "思考深度越高，回答越全面，但耗时更久，也会更快消耗额度。",
-            ),
-            ("ufa5QA7ilZ", "超强代码"),
-            (
-                "UFyiKhwBs8",
-                "超强代码 = 超高思考深度 + 工作流。最全面，但最慢，也最消耗额度。关闭标签页或重启应用后会重置。",
-            ),
-            ("9dx43BqWHy", "更快"),
-            ("bTBJTYxUYl", "更聪明"),
-        ],
-        "zh-TW" => vec![
-            ("xi2NxiZh10", "協作"),
-            ("Mn8BAEIrHk", "目前連續活躍"),
-            ("C2KvkQvJR0", "最長連續活躍"),
-            ("HcKBhf6Q5g", "最常用模型"),
-            ("Wr33QIAXEc", "今天我能幫你什麼？"),
-            ("J1Y/kwmQJi", "一起完成一項待辦吧"),
-            ("NetAY1U905", "聊天、協作和程式碼現在位於側邊欄中。"),
-            ("JQs8c3pGcl", "API 位址"),
-            ("NA4SBfPMeA", "API 金鑰"),
-            ("VKZ/U8vAsk", "思考深度"),
-            ("477I0ggSYe", "低"),
-            ("ovJ26CKo4Q", "中"),
-            ("AxMhQrcUDC", "高"),
-            ("kDEj60CmLq", "超高"),
-            ("kkjl2vQekD", "最高"),
-            (
-                "TRhvKflygs",
-                "思考深度越高，回答越完整，但耗時更久，也會更快消耗額度。",
-            ),
-            ("ufa5QA7ilZ", "超強程式碼"),
-            (
-                "UFyiKhwBs8",
-                "超強程式碼 = 超高思考深度 + 工作流程。最完整，但最慢，也最消耗額度。關閉分頁或重新啟動應用程式後會重設。",
-            ),
-            ("9dx43BqWHy", "更快"),
-            ("bTBJTYxUYl", "更聰明"),
-        ],
-        "zh-HK" => vec![
-            ("xi2NxiZh10", "協作"),
-            ("Mn8BAEIrHk", "目前連續活躍"),
-            ("C2KvkQvJR0", "最長連續活躍"),
-            ("HcKBhf6Q5g", "最常用模型"),
-            ("Wr33QIAXEc", "今日我可以幫你啲咩？"),
-            ("J1Y/kwmQJi", "一齊完成一項待辦吧"),
-            ("NetAY1U905", "聊天、協作同代碼而家喺側邊欄。"),
-            ("JQs8c3pGcl", "API 地址"),
-            ("NA4SBfPMeA", "API 金鑰"),
-            ("VKZ/U8vAsk", "思考深度"),
-            ("477I0ggSYe", "低"),
-            ("ovJ26CKo4Q", "中"),
-            ("AxMhQrcUDC", "高"),
-            ("kDEj60CmLq", "超高"),
-            ("kkjl2vQekD", "最高"),
-            (
-                "TRhvKflygs",
-                "思考深度越高，回答越完整，但耗時更耐，亦會更快消耗額度。",
-            ),
-            ("ufa5QA7ilZ", "超強代碼"),
-            (
-                "UFyiKhwBs8",
-                "超強代碼 = 超高思考深度 + 工作流程。最完整，但最慢，亦最消耗額度。關閉分頁或重新啟動應用程式後會重設。",
-            ),
-            ("9dx43BqWHy", "更快"),
-            ("bTBJTYxUYl", "更聰明"),
-        ],
-        _ => return None,
-    };
-
-    Some(overrides)
-}
-
-fn patch_engine_hardcoded_overrides(language: &str) -> Option<Vec<(&'static str, &'static str)>> {
-    let effort_level_source =
-        "label:e.name,value:e.id,checked:!on&&e.id===en,onSelect:()=>pn(e.id,!1)}";
-    let effort_level_target = match language {
-        "zh-CN" => {
-            "label:({low:\"低\",medium:\"中\",high:\"高\",xhigh:\"超高\",max:\"最高\"}[e.id]??e.name),value:e.id,checked:!on&&e.id===en,onSelect:()=>pn(e.id,!1)}"
-        }
-        "zh-TW" | "zh-HK" => {
-            "label:({low:\"低\",medium:\"中\",high:\"高\",xhigh:\"超高\",max:\"最高\"}[e.id]??e.name),value:e.id,checked:!on&&e.id===en,onSelect:()=>pn(e.id,!1)}"
-        }
-        _ => return None,
-    };
-
-    Some(vec![(effort_level_source, effort_level_target)])
 }
 
 fn run_patch_engine_elevated(
@@ -1887,56 +1639,6 @@ mod tests {
     }
 
     #[test]
-    fn writes_embedded_patch_engine_files() {
-        let root = env::temp_dir().join(format!(
-            "cc-desktop-zh-embedded-engine-test-{}",
-            std::process::id()
-        ));
-        let files = [
-            EmbeddedPatchFile {
-                relative_path: "scripts/install_windows.ps1",
-                bytes: b"Write-Host 'install'",
-            },
-            EmbeddedPatchFile {
-                relative_path: "resources/frontend-zh-CN.json",
-                bytes: br#"{"hello":"world"}"#,
-            },
-        ];
-
-        write_embedded_patch_engine(&root, &files).unwrap();
-
-        assert_eq!(
-            fs::read_to_string(root.join("scripts").join("install_windows.ps1")).unwrap(),
-            "Write-Host 'install'"
-        );
-        assert_eq!(
-            fs::read_to_string(root.join("resources").join("frontend-zh-CN.json")).unwrap(),
-            r#"{"hello":"world"}"#
-        );
-
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn embedded_patch_engine_rejects_parent_paths() {
-        let root = env::temp_dir().join(format!(
-            "cc-desktop-zh-embedded-engine-path-test-{}",
-            std::process::id()
-        ));
-        let files = [EmbeddedPatchFile {
-            relative_path: "../outside.txt",
-            bytes: b"bad",
-        }];
-
-        let error = write_embedded_patch_engine(&root, &files).unwrap_err();
-
-        assert!(error.contains("非法内置补丁路径"));
-        assert!(!root.with_file_name("outside.txt").exists());
-
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
     fn reads_windows_log_encodings() {
         let utf8_path = env::temp_dir().join(format!(
             "cc-desktop-zh-utf8-log-test-{}.log",
@@ -1963,116 +1665,6 @@ mod tests {
 
         let _ = fs::remove_file(utf8_path);
         let _ = fs::remove_file(utf16_path);
-    }
-
-    #[test]
-    fn applies_legacy_translation_overrides() {
-        let root = env::temp_dir().join(format!(
-            "cc-desktop-zh-override-test-{}",
-            std::process::id()
-        ));
-        let resources = root.join("resources");
-        fs::create_dir_all(&resources).unwrap();
-        let base_json = r#"{
-  "xi2NxiZh10": "Cowork",
-  "Mn8BAEIrHk": "当前连胜",
-  "C2KvkQvJR0": "最长连胜",
-  "HcKBhf6Q5g": "常用模型",
-  "Wr33QIAXEc": "What can I help you with?",
-  "J1Y/kwmQJi": "Let’s knock something off your list",
-  "477I0ggSYe": "Low",
-  "ovJ26CKo4Q": "Medium",
-  "AxMhQrcUDC": "High",
-  "kDEj60CmLq": "Extra high",
-  "kkjl2vQekD": "Max",
-  "TRhvKflygs": "Higher effort means more thorough responses, but takes longer and uses your limits faster.",
-  "ufa5QA7ilZ": "Ultracode",
-  "UFyiKhwBs8": "Ultracode is xhigh effort plus workflows. Most thorough, slowest, and heaviest on your limits. Resets when you close the tab or restart the app.",
-  "9dx43BqWHy": "Faster",
-  "bTBJTYxUYl": "Smarter"
-}"#;
-        fs::write(resources.join("frontend-zh-CN.json"), base_json).unwrap();
-        fs::write(resources.join("frontend-zh-TW.json"), base_json).unwrap();
-        fs::write(resources.join("frontend-zh-HK.json"), base_json).unwrap();
-        fs::write(resources.join("frontend-hardcoded-zh-CN.json"), "[]").unwrap();
-        fs::write(resources.join("frontend-hardcoded-zh-TW.json"), "[]").unwrap();
-        fs::write(resources.join("frontend-hardcoded-zh-HK.json"), "[]").unwrap();
-
-        apply_patch_engine_translation_overrides(&root, "zh-CN").unwrap();
-        apply_patch_engine_translation_overrides(&root, "zh-TW").unwrap();
-        apply_patch_engine_translation_overrides(&root, "zh-HK").unwrap();
-        let patched: Value = serde_json::from_str(
-            &fs::read_to_string(resources.join("frontend-zh-CN.json")).unwrap(),
-        )
-        .unwrap();
-        let patched_tw: Value = serde_json::from_str(
-            &fs::read_to_string(resources.join("frontend-zh-TW.json")).unwrap(),
-        )
-        .unwrap();
-        let patched_hk: Value = serde_json::from_str(
-            &fs::read_to_string(resources.join("frontend-zh-HK.json")).unwrap(),
-        )
-        .unwrap();
-        let hardcoded_cn: Value = serde_json::from_str(
-            &fs::read_to_string(resources.join("frontend-hardcoded-zh-CN.json")).unwrap(),
-        )
-        .unwrap();
-        let hardcoded_tw: Value = serde_json::from_str(
-            &fs::read_to_string(resources.join("frontend-hardcoded-zh-TW.json")).unwrap(),
-        )
-        .unwrap();
-        let hardcoded_hk: Value = serde_json::from_str(
-            &fs::read_to_string(resources.join("frontend-hardcoded-zh-HK.json")).unwrap(),
-        )
-        .unwrap();
-
-        assert_eq!(patched["xi2NxiZh10"], "协作");
-        assert_eq!(patched["Mn8BAEIrHk"], "当前连续活跃");
-        assert_eq!(patched["C2KvkQvJR0"], "最长连续活跃");
-        assert_eq!(patched["HcKBhf6Q5g"], "最常用模型");
-        assert_eq!(patched["Wr33QIAXEc"], "今天我能帮你什么？");
-        assert_eq!(patched["J1Y/kwmQJi"], "一起完成一项待办吧");
-        assert_eq!(patched["477I0ggSYe"], "低");
-        assert_eq!(patched["ovJ26CKo4Q"], "中");
-        assert_eq!(patched["AxMhQrcUDC"], "高");
-        assert_eq!(patched["kDEj60CmLq"], "超高");
-        assert_eq!(patched["kkjl2vQekD"], "最高");
-        assert_eq!(
-            patched["TRhvKflygs"],
-            "思考深度越高，回答越全面，但耗时更久，也会更快消耗额度。"
-        );
-        assert_eq!(patched["ufa5QA7ilZ"], "超强代码");
-        assert_eq!(
-            patched["UFyiKhwBs8"],
-            "超强代码 = 超高思考深度 + 工作流。最全面，但最慢，也最消耗额度。关闭标签页或重启应用后会重置。"
-        );
-        assert_eq!(patched["9dx43BqWHy"], "更快");
-        assert_eq!(patched["bTBJTYxUYl"], "更聪明");
-        assert_eq!(patched_tw["xi2NxiZh10"], "協作");
-        assert_eq!(patched_tw["Wr33QIAXEc"], "今天我能幫你什麼？");
-        assert_eq!(patched_tw["J1Y/kwmQJi"], "一起完成一項待辦吧");
-        assert_eq!(patched_tw["ufa5QA7ilZ"], "超強程式碼");
-        assert_eq!(patched_tw["UFyiKhwBs8"], "超強程式碼 = 超高思考深度 + 工作流程。最完整，但最慢，也最消耗額度。關閉分頁或重新啟動應用程式後會重設。");
-        assert_eq!(patched_tw["kkjl2vQekD"], "最高");
-        assert_eq!(patched_hk["xi2NxiZh10"], "協作");
-        assert_eq!(patched_hk["Wr33QIAXEc"], "今日我可以幫你啲咩？");
-        assert_eq!(patched_hk["J1Y/kwmQJi"], "一齊完成一項待辦吧");
-        assert_eq!(patched_hk["ufa5QA7ilZ"], "超強代碼");
-        assert_eq!(patched_hk["UFyiKhwBs8"], "超強代碼 = 超高思考深度 + 工作流程。最完整，但最慢，亦最消耗額度。關閉分頁或重新啟動應用程式後會重設。");
-        assert_eq!(patched_hk["kkjl2vQekD"], "最高");
-        let expected_source =
-            "label:e.name,value:e.id,checked:!on&&e.id===en,onSelect:()=>pn(e.id,!1)}";
-        let expected_target =
-            "label:({low:\"低\",medium:\"中\",high:\"高\",xhigh:\"超高\",max:\"最高\"}[e.id]??e.name),value:e.id,checked:!on&&e.id===en,onSelect:()=>pn(e.id,!1)}";
-        for hardcoded in [hardcoded_cn, hardcoded_tw, hardcoded_hk] {
-            let items = hardcoded.as_array().unwrap();
-            assert!(items.iter().any(|item| {
-                item.get(0).and_then(Value::as_str) == Some(expected_source)
-                    && item.get(1).and_then(Value::as_str) == Some(expected_target)
-            }));
-        }
-
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

@@ -43,6 +43,7 @@
 - Microsoft Edge WebView2 Runtime
 - Python 3 或 `py` 启动器
 - 可用的 winget，用于检查官方最新版本
+- 可访问 GitHub 的网络，用于执行汉化补丁操作时获取最新后端
 
 ## 开发运行
 
@@ -76,15 +77,17 @@ cargo test
 cargo check
 ```
 
-## 汉化引擎
+## 汉化后端
 
-发布版 exe 内置 `claude-desktop-zh-cn` 补丁引擎。首次安装或修复中文补丁时，程序会优先释放内置引擎到：
+本项目只提供 Windows 图形壳和本机操作入口，汉化后端运行时直接从 [javaht/claude-desktop-zh-cn](https://github.com/javaht/claude-desktop-zh-cn) 获取。
+
+每次安装中文补丁、恢复原样或修改自动更新设置前，程序都会联网下载 javaht 仓库最新 `main.zip`，并解压到：
 
 ```text
 %LOCALAPPDATA%\ClaudeDesktopCN\patch-engine
 ```
 
-如果当前构建没有内置补丁引擎，程序会从 [javaht/claude-desktop-zh-cn](https://github.com/javaht/claude-desktop-zh-cn) 下载作为兜底。下载或释放失败时，应用会显示明确错误，不会伪装成功。
+因此这些补丁操作需要用户保持网络可用。下载、解压或结构校验失败时，应用会显示明确错误，不会伪装成功。
 
 ## Legacy 入口
 

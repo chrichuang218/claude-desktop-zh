@@ -87,11 +87,11 @@ const PREVIEW_STATUS: LauncherStatus = {
   shortcut_ready: true,
   patcher_ready: false,
   python_ready: true,
-  engine_ready: false,
+  engine_ready: true,
   backup_ready: false,
   language: '未设置',
   install_path: 'C:\\Users\\you\\AppData\\Local\\Programs\\Claude\\Claude.exe',
-  engine_path: '首次安装时自动下载 javaht/claude-desktop-zh-cn',
+  engine_path: '执行补丁操作时联网获取 javaht/claude-desktop-zh-cn',
   message: '网页预览：真实状态会在桌面应用中显示。',
 }
 
@@ -160,6 +160,9 @@ function pollsPatchLog(command: ActionCommand | null) {
 
 function actionStartingLog(command: ActionCommand) {
   if (command === 'check_update') return '正在读取 winget 官方版本信息...'
+  if (command === 'install_patch' || command === 'restore_patch' || command === 'set_auto_updates') {
+    return '正在从 javaht/claude-desktop-zh-cn 获取最新补丁引擎，请保持联网...'
+  }
   return '等待管理员授权或补丁进程启动...'
 }
 
@@ -212,7 +215,7 @@ function statusLog(status: LauncherStatus, runningInTauri: boolean) {
   const lines = [`[结论] ${statusConclusion(status, runningInTauri)}`]
   lines.push(`[状态] Claude Desktop：${status.installed ? '已安装' : '未找到'}`)
   lines.push(`[状态] 中文补丁：${status.localized ? status.language : '未安装'}`)
-  lines.push(`[状态] 补丁引擎：${status.engine_ready ? '已准备' : '首次安装时下载'}`)
+  lines.push('[状态] 在线补丁引擎：执行时联网获取')
   lines.push(`[状态] PowerShell：${status.python_ready ? '可用' : '不可用'}`)
   if (status.install_path) lines.push(`[路径] Claude：${displayPath(status.install_path)}`)
   if (status.engine_path) lines.push(`[路径] 工作目录：${displayPath(status.engine_path)}`)
@@ -400,7 +403,7 @@ function App() {
       `Claude：${status.install_path ? displayPath(status.install_path) : '未找到'}`,
       `版本：${status.version || '未检测到'}`,
       `语言：${status.language}`,
-      `补丁引擎：${status.engine_path ? displayPath(status.engine_path) : '未准备'}`,
+      `在线补丁引擎工作目录：${status.engine_path ? displayPath(status.engine_path) : '未准备'}`,
       liveLog ? `\n${liveLogTitle}\n${liveLog}` : '',
       '',
       ...activities.map((item) => `${item.title}\n${item.summary}\n${item.detail ?? ''}`.trim()),
@@ -442,9 +445,9 @@ function App() {
         value: status.localized ? status.language : '未安装',
       },
       {
-        label: '补丁引擎',
-        ok: status.engine_ready,
-        value: status.engine_ready ? '已准备' : '首次安装时下载',
+        label: '在线补丁引擎',
+        ok: true,
+        value: '执行时联网获取',
       },
       {
         label: 'PowerShell',
