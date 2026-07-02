@@ -466,6 +466,40 @@ select {
 
 .status-row strong {
   font-size: 13px;
+  text-align: right;
+}
+
+.notice-list {
+  display: grid;
+  gap: 8px;
+}
+
+.notice-row {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.notice-row strong {
+  font-size: 13px;
+}
+
+.notice-row span {
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.notice-row.safe strong {
+  color: var(--ok-fg);
+}
+
+.notice-row.official strong,
+.notice-row.network strong {
+  color: var(--warn-fg);
 }
 
 .compact-actions {

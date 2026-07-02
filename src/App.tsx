@@ -102,19 +102,21 @@ const languageOptions: Array<{ value: LanguageCode; label: string }> = [
 ]
 
 const modeOptions: Array<{ value: PatchMode; label: string; note: string }> = [
-  { value: 'safe', label: '稳定模式', note: '优先稳定和可恢复，推荐日常使用' },
-  { value: 'official', label: '覆盖更多文本', note: '修改更深层文本，覆盖更完整但风险更高' },
+  { value: 'safe', label: 'Cowork 兼容', note: '不改 app.asar，保留 Cowork 沙箱和工作区兼容性' },
+  { value: 'official', label: '官方账号', note: '修改 app.asar，支持 online 登录后的 claude.ai 页面汉化' },
 ]
 
-const modeDetails: Record<PatchMode, { title: string; body: string; tone: string }> = {
+const modeDetails: Record<PatchMode, { title: string; body: string; footnote: string; tone: string }> = {
   safe: {
-    title: '推荐：稳定模式',
-    body: '更适合 WindowsApps 版，优先保证安装、恢复和后续更新稳定。少量很深的菜单或系统文本可能仍是英文。',
+    title: '模式 1：Cowork 兼容模式',
+    body: '不改 app.asar，保留 Cowork 沙箱/工作区兼容性。',
+    footnote: 'online 登录后的 claude.ai 页面不做 DOM 汉化。',
     tone: 'safe',
   },
   official: {
-    title: '覆盖更多文本',
-    body: '会处理更深层的应用包文本，汉化范围更广。对应地，恢复、应用更新和个别工作区能力的风险也更高。',
+    title: '模式 2：官方账号登录模式',
+    body: '会修改 app.asar，支持 online 登录后的 claude.ai 页面汉化。',
+    footnote: '可能导致 Cowork 沙箱/工作区不可用。',
     tone: 'official',
   },
 }
@@ -216,6 +218,8 @@ function statusLog(status: LauncherStatus, runningInTauri: boolean) {
   lines.push(`[状态] Claude Desktop：${status.installed ? '已安装' : '未找到'}`)
   lines.push(`[状态] 中文补丁：${status.localized ? status.language : '未安装'}`)
   lines.push('[状态] 在线补丁引擎：执行时联网获取')
+  lines.push('[提示] 补丁操作需要访问 GitHub，运行时从 javaht/claude-desktop-zh-cn 获取最新后端。')
+  lines.push('[提示] Cowork 兼容模式不汉化 online 账号页；官方账号登录模式支持 online 页面汉化，但可能影响 Cowork。')
   lines.push(`[状态] PowerShell：${status.python_ready ? '可用' : '不可用'}`)
   if (status.install_path) lines.push(`[路径] Claude：${displayPath(status.install_path)}`)
   if (status.engine_path) lines.push(`[路径] 工作目录：${displayPath(status.engine_path)}`)
@@ -450,6 +454,11 @@ function App() {
         value: '执行时联网获取',
       },
       {
+        label: '网络要求',
+        ok: true,
+        value: '需要访问 GitHub',
+      },
+      {
         label: 'PowerShell',
         ok: status.python_ready,
         value: status.python_ready ? '可用' : '不可用',
@@ -523,6 +532,7 @@ function App() {
           <div className={`mode-detail ${modeDetails[patchMode].tone}`}>
             <strong>{modeDetails[patchMode].title}</strong>
             <span>{modeDetails[patchMode].body}</span>
+            <span>{modeDetails[patchMode].footnote}</span>
           </div>
 
           <div className="action-row">
@@ -590,6 +600,26 @@ function App() {
                   <strong>{status.state === 'loading' ? '检查中' : item.value}</strong>
                 </div>
               ))}
+            </div>
+          </section>
+
+          <section className="card">
+            <div className="section-title">
+              <h2>账号页面汉化</h2>
+            </div>
+            <div className="notice-list">
+              <div className="notice-row safe">
+                <strong>模式 1</strong>
+                <span>Cowork 兼容，不改 app.asar；online 登录后的 claude.ai 页面不做 DOM 汉化。</span>
+              </div>
+              <div className="notice-row official">
+                <strong>模式 2</strong>
+                <span>官方账号登录，修改 app.asar；支持 online 页面汉化，但可能影响 Cowork 沙箱/工作区。</span>
+              </div>
+              <div className="notice-row network">
+                <strong>联网</strong>
+                <span>每次补丁操作都会从 javaht/claude-desktop-zh-cn 获取最新后端，需要可访问 GitHub。</span>
+              </div>
             </div>
           </section>
 
