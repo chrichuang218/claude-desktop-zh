@@ -9,23 +9,27 @@
 
 ## 效果图
 
-![效果图 1](screenshots/7.png)
+![Claude 计费页面汉化](screenshots/1.png)
 
-![安装中文补丁](screenshots/readme-05.png)
+![Claude 项目页面汉化](screenshots/2.png)
 
-![启动 Claude](screenshots/readme-06.png)
+![启动器 Cowork 兼容模式](screenshots/3.png)
 
-![恢复原样](screenshots/readme-04.png)
+![启动器 ASAR 修改模式](screenshots/4.png)
 
-![效果图 5](screenshots/readme-01.png)
+![恢复原样确认](screenshots/5.png)
 
-![效果图 6](screenshots/readme-02.png)
+![启动器安装状态](screenshots/7.png)
 
-![效果图 7](screenshots/readme-03.png)
+![效果图 7](screenshots/readme-01.png)
 
-![效果图 8](screenshots/readme-07.png)
+![效果图 8](screenshots/readme-02.png)
 
-![效果图 9](screenshots/readme-08.png)
+![效果图 9](screenshots/readme-03.png)
+
+![效果图 10](screenshots/readme-07.png)
+
+![效果图 11](screenshots/readme-08.png)
 
 ## 功能
 
@@ -88,6 +92,17 @@ cargo check
 ```
 
 因此这些补丁操作需要用户保持网络可用。下载、解压或结构校验失败时，应用会显示明确错误，不会伪装成功。
+
+## 安装模式说明
+
+本项目沿用 javaht 后端的两种 Windows 安装模式：
+
+| 模式 | 适合场景 | 说明 |
+| --- | --- | --- |
+| 模式 1：Cowork 兼容 | 需要保留 Cowork 沙箱 / 截图工作区 | 跳过 `app.asar` 补丁，online 登录后的 `claude.ai` 页面不做 DOM 汉化。第三方模型请通过网关或 `ccswitch` 做模型别名映射。 |
+| 模式 2：ASAR 修改 | 需要 online 页面 DOM 汉化 | 会修改当前 Claude 的 `app.asar`，覆盖聊天、项目、Artifacts 等远程页面；官方账号和第三方登录都可选择。该模式可能触发完整性 / 签名校验问题，影响 Cowork 沙箱 / 工作区兼容性。 |
+
+如果你主要使用 Cowork、截图工作区或对客户端完整性校验敏感，优先选择模式 1。如果你更需要 online 登录后的页面汉化，再选择模式 2。
 
 ## Legacy 入口
 

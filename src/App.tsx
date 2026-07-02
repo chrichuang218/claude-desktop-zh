@@ -103,20 +103,26 @@ const languageOptions: Array<{ value: LanguageCode; label: string }> = [
 
 const modeOptions: Array<{ value: PatchMode; label: string; note: string }> = [
   { value: 'safe', label: 'Cowork 兼容', note: '不改 app.asar，保留 Cowork 沙箱和工作区兼容性' },
-  { value: 'official', label: '官方账号', note: '修改 app.asar，支持 online 登录后的 claude.ai 页面汉化' },
+  { value: 'official', label: 'ASAR 修改', note: '修改 app.asar，支持 online 登录后的 claude.ai 页面汉化' },
 ]
 
-const modeDetails: Record<PatchMode, { title: string; body: string; footnote: string; tone: string }> = {
+const modeDetails: Record<PatchMode, { title: string; lines: string[]; tone: string }> = {
   safe: {
     title: '模式 1：Cowork 兼容模式',
-    body: '不改 app.asar，保留 Cowork 沙箱/工作区兼容性。',
-    footnote: 'online 登录后的 claude.ai 页面不做 DOM 汉化。',
+    lines: [
+      '不改 app.asar，保留 Cowork 沙箱/工作区兼容性。',
+      '第三方登录可选择；官方账号登录后的 claude.ai 页面不做 DOM 汉化。',
+      '如需官方账号 online 页面汉化，请选择 ASAR 修改模式。',
+    ],
     tone: 'safe',
   },
   official: {
-    title: '模式 2：官方账号登录模式',
-    body: '会修改 app.asar，支持 online 登录后的 claude.ai 页面汉化。',
-    footnote: '可能导致 Cowork 沙箱/工作区不可用。',
+    title: '模式 2：ASAR 修改模式',
+    lines: [
+      '修改 app.asar，支持 online 登录后的 claude.ai 页面 DOM 汉化。',
+      '安装前会自动备份 app.asar 和 Claude.exe；恢复原样时从备份还原。',
+      '官方账号和第三方登录都可选择；可能影响 Cowork 沙箱/工作区兼容性。',
+    ],
     tone: 'official',
   },
 }
@@ -161,7 +167,7 @@ function pollsPatchLog(command: ActionCommand | null) {
 }
 
 function actionStartingLog(command: ActionCommand) {
-  if (command === 'check_update') return '正在读取 winget 官方版本信息...'
+  if (command === 'check_update') return '等待管理员授权后检查 winget 官方版本信息...'
   if (command === 'install_patch' || command === 'restore_patch' || command === 'set_auto_updates') {
     return '正在从 javaht/claude-desktop-zh-cn 获取最新补丁引擎，请保持联网...'
   }
@@ -219,7 +225,7 @@ function statusLog(status: LauncherStatus, runningInTauri: boolean) {
   lines.push(`[状态] 中文补丁：${status.localized ? status.language : '未安装'}`)
   lines.push('[状态] 在线补丁引擎：执行时联网获取')
   lines.push('[提示] 补丁操作需要访问 GitHub，运行时从 javaht/claude-desktop-zh-cn 获取最新后端。')
-  lines.push('[提示] Cowork 兼容模式不汉化 online 账号页；官方账号登录模式支持 online 页面汉化，但可能影响 Cowork。')
+  lines.push('[提示] Cowork 兼容模式不汉化 online 账号页；ASAR 修改模式支持 online 页面汉化，官方账号和第三方登录都可用，但可能影响 Cowork。')
   lines.push(`[状态] PowerShell：${status.python_ready ? '可用' : '不可用'}`)
   if (status.install_path) lines.push(`[路径] Claude：${displayPath(status.install_path)}`)
   if (status.engine_path) lines.push(`[路径] 工作目录：${displayPath(status.engine_path)}`)
@@ -362,7 +368,9 @@ function App() {
         summary: summarizeDetail(summarySource),
         detail: result.log || result.message,
       })
-      await refreshStatus(true)
+      if (command !== 'check_update') {
+        await refreshStatus(true)
+      }
     } catch (error) {
       if (command === 'check_update') {
         setLiveLog(String(error))
@@ -531,8 +539,9 @@ function App() {
 
           <div className={`mode-detail ${modeDetails[patchMode].tone}`}>
             <strong>{modeDetails[patchMode].title}</strong>
-            <span>{modeDetails[patchMode].body}</span>
-            <span>{modeDetails[patchMode].footnote}</span>
+            {modeDetails[patchMode].lines.map((line) => (
+              <span key={line}>{line}</span>
+            ))}
           </div>
 
           <div className="action-row">
@@ -600,26 +609,6 @@ function App() {
                   <strong>{status.state === 'loading' ? '检查中' : item.value}</strong>
                 </div>
               ))}
-            </div>
-          </section>
-
-          <section className="card">
-            <div className="section-title">
-              <h2>账号页面汉化</h2>
-            </div>
-            <div className="notice-list">
-              <div className="notice-row safe">
-                <strong>模式 1</strong>
-                <span>Cowork 兼容，不改 app.asar；online 登录后的 claude.ai 页面不做 DOM 汉化。</span>
-              </div>
-              <div className="notice-row official">
-                <strong>模式 2</strong>
-                <span>官方账号登录，修改 app.asar；支持 online 页面汉化，但可能影响 Cowork 沙箱/工作区。</span>
-              </div>
-              <div className="notice-row network">
-                <strong>联网</strong>
-                <span>每次补丁操作都会从 javaht/claude-desktop-zh-cn 获取最新后端，需要可访问 GitHub。</span>
-              </div>
             </div>
           </section>
 

@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
     env, fs,
@@ -32,7 +32,7 @@ struct LauncherStatus {
     message: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct ActionResult {
     ok: bool,
     state: String,
@@ -56,6 +56,7 @@ struct WingetMetadata {
 const PATCH_ENGINE_ZIP_URL: &str =
     "https://github.com/javaht/claude-desktop-zh-cn/archive/refs/heads/main.zip";
 const ELEVATED_HELPER_ARG: &str = "--run-patch-engine-elevated-helper";
+const ELEVATED_CHECK_UPDATE_ARG: &str = "--run-check-update-elevated-helper";
 const PRODUCT_DATA_DIR: &str = "ClaudeDesktopCN";
 const PATCH_ENGINE_DIR: &str = "patch-engine";
 
@@ -103,7 +104,18 @@ fn get_live_log() -> LiveLog {
 
 #[tauri::command]
 async fn check_update() -> ActionResult {
-    run_blocking_action(check_update_inner).await
+    run_blocking_action(check_update_elevated).await
+}
+
+fn check_update_elevated() -> ActionResult {
+    if is_current_process_elevated() {
+        return check_update_inner();
+    }
+
+    match run_self_elevated_check_update() {
+        Ok(result) => result,
+        Err(error) => ActionResult::error("repair", &format!("管理员检查更新失败：{error}")),
+    }
 }
 
 fn check_update_inner() -> ActionResult {
@@ -593,6 +605,62 @@ fn wait_for_elevated_completion(completion: &Path, timeout: Duration) -> Result<
         thread::sleep(Duration::from_millis(500));
     }
     Err("管理员补丁进程超时，请检查是否有未处理的 UAC 确认窗口。".to_string())
+}
+
+fn run_self_elevated_check_update() -> Result<ActionResult, String> {
+    let work_dir = local_app_data().join(PRODUCT_DATA_DIR);
+    fs::create_dir_all(&work_dir).map_err(|error| format!("创建工作目录失败：{error}"))?;
+    let result_path = work_dir.join("check-update-result.json");
+    let _ = fs::remove_file(&result_path);
+
+    let exe = env::current_exe().map_err(|error| format!("定位当前程序失败：{error}"))?;
+    let argument_list = check_update_helper_argument_list(&result_path);
+    let command = elevated_start_command(&exe, &argument_list, &work_dir);
+
+    let mut powershell = Command::new("powershell.exe");
+    hide_console_window(&mut powershell);
+    let output = powershell
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &command,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("启动管理员检查更新进程失败：{error}"))?;
+
+    if !output.status.success() {
+        return Err(process_output_text(&output.stdout, &output.stderr));
+    }
+
+    wait_for_elevated_action_result(&result_path, Duration::from_secs(5 * 60))
+}
+
+fn wait_for_elevated_action_result(path: &Path, timeout: Duration) -> Result<ActionResult, String> {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if path.exists() {
+            let raw = read_text_if_present(path);
+            return serde_json::from_str(&raw)
+                .map_err(|error| format!("管理员检查更新结果解析失败：{error}"));
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    Err("管理员检查更新进程超时，请检查是否有未处理的 UAC 确认窗口。".to_string())
+}
+
+fn check_update_helper_argument_list(result_path: &Path) -> String {
+    format!(
+        "{} \"{}\"",
+        ELEVATED_CHECK_UPDATE_ARG,
+        result_path.display()
+    )
 }
 
 fn prepare_patch_engine_appx_script(engine: &Path) -> Result<PathBuf, String> {
@@ -1432,6 +1500,10 @@ pub fn run() {
             run_elevated_patch_engine_helper(&launcher, &completion, &stdout_log, &stderr_log);
         std::process::exit(code);
     }
+    if let Some(result_path) = elevated_check_update_result_path() {
+        let code = run_elevated_check_update_helper(&result_path);
+        std::process::exit(code);
+    }
 
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -1446,6 +1518,17 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run app");
+}
+
+fn elevated_check_update_result_path() -> Option<PathBuf> {
+    let mut args = env::args_os();
+    let _ = args.next();
+    while let Some(arg) = args.next() {
+        if arg == ELEVATED_CHECK_UPDATE_ARG {
+            return args.next().map(PathBuf::from);
+        }
+    }
+    None
 }
 
 fn elevated_helper_args() -> Option<(PathBuf, PathBuf, PathBuf, PathBuf)> {
@@ -1465,6 +1548,18 @@ fn elevated_helper_args() -> Option<(PathBuf, PathBuf, PathBuf, PathBuf)> {
         }
     }
     None
+}
+
+fn run_elevated_check_update_helper(result_path: &Path) -> i32 {
+    let result = check_update_inner();
+    let code = if result.ok { 0 } else { 1 };
+    let write_result = serde_json::to_vec(&result)
+        .map_err(|error| error.to_string())
+        .and_then(|bytes| fs::write(result_path, bytes).map_err(|error| error.to_string()));
+    if write_result.is_err() {
+        return 1;
+    }
+    code
 }
 
 fn run_elevated_patch_engine_helper(

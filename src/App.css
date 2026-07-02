@@ -92,6 +92,7 @@ select:disabled {
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 390px;
+  align-items: stretch;
   gap: 18px;
   padding-top: 18px;
 }
@@ -105,6 +106,7 @@ select:disabled {
 }
 
 .main-panel {
+  align-self: start;
   min-height: 0;
   padding: 24px 42px;
   display: flex;
@@ -409,8 +411,11 @@ select {
 
 .side-panel {
   display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  align-self: stretch;
   gap: 14px;
   align-content: start;
+  height: 100%;
 }
 
 .card {
@@ -469,39 +474,6 @@ select {
   text-align: right;
 }
 
-.notice-list {
-  display: grid;
-  gap: 8px;
-}
-
-.notice-row {
-  display: grid;
-  gap: 5px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-muted);
-}
-
-.notice-row strong {
-  font-size: 13px;
-}
-
-.notice-row span {
-  color: var(--text-soft);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.notice-row.safe strong {
-  color: var(--ok-fg);
-}
-
-.notice-row.official strong,
-.notice-row.network strong {
-  color: var(--warn-fg);
-}
-
 .compact-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -524,13 +496,21 @@ select {
 }
 
 .log-card ol {
-  max-height: 200px;
+  min-height: 0;
+  max-height: none;
+  flex: 1;
   overflow: auto;
   margin: 0;
   padding: 0;
   display: grid;
   gap: 9px;
   list-style: none;
+}
+
+.log-card {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .log-card li {
@@ -693,6 +673,20 @@ pre {
 
   .main-panel {
     min-height: auto;
+  }
+
+  .side-panel {
+    grid-template-rows: none;
+    align-self: start;
+    height: auto;
+  }
+
+  .log-card {
+    display: block;
+  }
+
+  .log-card ol {
+    max-height: 200px;
   }
 }
 
